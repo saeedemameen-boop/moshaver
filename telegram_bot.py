@@ -3,10 +3,11 @@ import telegram
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 import requests
 import json
+import os
 
 # --- CONFIGURATION ---
-TELEGRAM_TOKEN = "8276737029:AAHpCqU2SP6wYsQPOkXe3OjDr37WGvkQK2M"
-GAPGPT_API_KEY = "sk-q0nejQizw1DkD3ckvGQOvhDZM8lO9oKVJfyFKb1Z0SPlSOnr"
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+GAPGPT_API_KEY = os.environ.get("GAPGPT_API_KEY")
 GAPGPT_API_URL = "https://api.gapgpt.app/v1/chat/completions"
 GAPGPT_MODEL = "gapgpt-deepseek-v3"
 
