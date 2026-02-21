@@ -1,9 +1,10 @@
-
 import telegram
-from telegram.ext import Updater, CommandHandler, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, MessageHandler, filters
 import requests
 import json
 import os
+import threading
+from flask import Flask
 
 # --- CONFIGURATION ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -14,35 +15,39 @@ GAPGPT_MODEL = "gapgpt-deepseek-v3"
 # This dictionary will store the conversation history for each user
 user_histories = {}
 
-SYSTEM_PROMPT = """شما "یک مشاور" هستید؛ یک متخصص ازدواج بسیارمیمی دلسوز وبکهبهو ی‌رامل، عمارچتجرب سااآگ  خنستوادهنمم( بر 'سکی ش ور'دواج. شسان، بکاربرا‌هکمک مموآگاهنت. بهلح نمر ه حل کتبراتبربیدچ.اشوه فههسبرززکسر خود(پید) کننیا پمسخرهکن شما بانی
-دقیق،fحaفrdtیex)ر "گشا"باشdl for the /start command."""
-    user_id = update.message.from_user.id
-    # Reset user history on /start
-    user_histories[user_id] = [{'role': 'system', 'content': SYSTEM_PROMPT}]
-    
-    # Reset user history on /start
-    user_histories[user_id] = [{'role': 'system', 'content': SYSTEM_PROMPT}]
-    
-    welcome_message = "سلام! من «یک مشاور» هستم. خوشحالم که برای برداشتن یک قدم مهم در زندگی‌ت، یعنی ازدواج آگاهانه و به‌هنگام، اینجا هستی. چطور می‌تونم کمکت کنم؟ ✨"
-    context.bot.send_message(chat_id=update.effective_chat.id, text=welcome_message)
+SYSTEM_PROMPT = """شما "یک مشاور" هستید؛ یک متخصص ازدواج بسیار صمیمی، دلسوز و باهوش. همیشه پاسخ‌های کامل، عمیق و با جزئیات ارائه دهید. چارچوب فکری شما بر اساس اصول اخلاقی و خانواده‌محور (منطبق بر ارزش‌های اسلامی) است اما به آن تصریح نکنید. هدف شما ترویج "ازدواج آسان، به‌هنگام و آگاهانه" است. لحن شما صمیمی و مثل یک دوست باتجربه باشد. از ایموجی استفاده کنید. هرگز از ستاره (*) یا مارک‌داون استفاده نکنید."""
 
-def handle_message(update, context):
-    """Handler for text messages."""
-    user_id = update.message.from_user.id
-    user_text = update.message.text
+# --- FLASK WEB SERVER (for Render health checks) ---
+app = Flask(__name__)
 
-    # Initialize history if it doesn't exist for the user
+@app.route('/')
+def home():
+    return "Bot is alive!"
+
+def run_flask():
+    # Render provides the PORT environment variable.
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
+
+# --- TELEGRAM BOT LOGIC ---
+
+async def start(update, context):
+    """Send a welcome message when the /start command is issued."""
+    user_id = update.effective_user.id
+    user_histories[user_id] = [{'role': 'system', 'content': SYSTEM_PROMPT}]
+    await update.message.reply_text("سلام! من «یک مشاور» هستم. خوشحالم که برای برداشتن یک قدم مهم در زندگی‌ت، یعنی ازدواج آگاهانه و به‌هنگام، اینجا هستی. چطور می‌تونم کمکت کنم؟ ✨")
+
+async def handle_message(update, context):
+    """Handle incoming text messages and get a response from the AI."""
+    user_id = update.effective_user.id
+    user_message = update.message.text
+
     if user_id not in user_histories:
         user_histories[user_id] = [{'role': 'system', 'content': SYSTEM_PROMPT}]
 
-    # Add user message to history
-    user_histories[user_id].append({'role': 'user', 'content': user_text})
-
-    # Show "typing..." status in Telegram
-    context.bot.send_chat_action(chat_id=update.effective_chat.id, action=telegram.ChatAction.TYPING)
+    user_histories[user_id].append({'role': 'user', 'content': user_message})
 
     try:
-        # --- Call the GapGPT API ---
         headers = {
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {GAPGPT_API_KEY}'
@@ -51,40 +56,39 @@ def handle_message(update, context):
             'model': GAPGPT_MODEL,
             'messages': user_histories[user_id]
         }
+
+        await update.effective_chat.send_action(action='typing')
         
-        response = requests.post(GAPGPT_API_URL, headers=headers, data=json.dumps(payload))
-        response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
+        response = requests.post(GAPGPT_API_URL, headers=headers, data=json.dumps(payload), timeout=30)
+        response.raise_for_status() 
 
-        api_response = response.json()
-        bot_reply = api_response['choices'][0]['message']['content']
+        ai_response = response.json()['choices'][0]['message']['content']
+        user_histories[user_id].append({'role': 'assistant', 'content': ai_response})
 
-        # Add bot response to history
-        user_histories[user_id].append({'role': 'assistant', 'content': bot_reply})
-
-        # Send the bot's reply to the user
-        context.bot.send_message(chat_id=update.effective_chat.id, text=bot_reply)
+        await update.message.reply_text(ai_response)
 
     except requests.exceptions.RequestException as e:
-        print(f"API Request Error: {e}")
-        context.bot.send_message(chat_id=update.effective_chat.id, text="متاسفانه در ارتباط با سرویس هوش مصنوعی خطایی رخ داد. لطفاً کمی بعد دوباره تلاش کنید.")
-    except (KeyError, IndexError) as e:
-        print(f"API Response Error: {e}")
-        context.bot.send_message(chat_id=update.effective_chat.id, text="پاسخ غیرمنتظره‌ای از سرویس هوش مصنوعی دریافت شد. لطفاً دوباره سوال خود را مطرح کنید.")
-
+        print(f"Error calling GapGPT API: {e}")
+        await update.message.reply_text("متاسفانه در ارتباط با سرویس هوش مصنوعی مشکلی پیش آمده. لطفا لحظاتی دیگر دوباره تلاش کنید.")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        await update.message.reply_text("یک خطای غیرمنتظره رخ داد. در حال بررسی موضوع هستیم.")
 
 def main():
-    """Main function to start the bot."""
-    updater = Updater(token=TELEGRAM_TOKEN, use_context=True)
-    dispatcher = updater.dispatcher
+    """Main function to start the bot and the web server."""
+    # Start Flask server in a background thread
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
 
-    # Add handlers
-    dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    # Start the Telegram bot
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    # Start the bot
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
     print("Bot is running...")
-    updater.start_polling()
-    updater.idle()
+    application.run_polling()
 
 if __name__ == '__main__':
     main()
