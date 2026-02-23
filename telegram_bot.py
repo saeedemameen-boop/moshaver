@@ -91,7 +91,11 @@ async def handle_message(update, context):
 
         await update.effective_chat.send_action(action='typing')
         
+        print("DEBUG: Sending request to GapGPT API...")
         response = requests.post(GAPGPT_API_URL, headers=headers, data=json.dumps(payload), timeout=30)
+        print(f"DEBUG: GapGPT API Response Status: {response.status_code}")
+        print(f"DEBUG: GapGPT API Response Body: {response.text}")
+        
         response.raise_for_status() 
 
         ai_response = response.json()['choices'][0]['message']['content']
@@ -116,8 +120,8 @@ def main():
     # Start the Telegram bot
     application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_message))
 
     print("Bot is running...")
     application.run_polling()
