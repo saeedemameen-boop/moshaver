@@ -5,6 +5,8 @@ import json
 import os
 import threading
 from flask import Flask
+import asyncio
+import httpx
 
 # --- CONFIGURATION ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -46,71 +48,61 @@ async def is_user_in_channel(user_id, bot):
         return False
 
 
-async def start(update, context):
-    """Send a welcome message when the /start command is issued."""
+async def start(update: telegram.Update, context: telegram.ext.ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    await context.bot.send_message(chat_id=user_id, text="سلام! به ربات مشاور کسب و کار خوش آمدید. لطفاً برای استفاده از خدمات، عضو کانال @hamin_media شوید.")
 
-    # Check for channel membership
-    if not await is_user_in_channel(user_id, context.bot):
-        await update.message.reply_text(
-            "سلام! برای استفاده از ربات «یک مشاور»، ابتدا باید در کانال «حامین مدیا» عضو بشی. لطفاً از طریق لینک زیر عضو شو و بعد دوباره روی /start کلیک کن. 😊\n\nhttps://t.me/hamin_media"
-        )
-        return
-
-    user_histories[user_id] = [{'role': 'system', 'content': SYSTEM_PROMPT}]
-    await update.message.reply_text("سلام! من «یک مشاور» هستم. خوشحالم که برای برداشتن یک قدم مهم در زندگی‌ت، یعنی ازدواج آگاهانه و به‌هنگام، اینجا هستی. چطور می‌تونم کمکت کنم؟ ✨")
-
-
-async def handle_message(update, context):
-    """Handle incoming text messages and get a response from the AI."""
+async def handle_message(update: telegram.Update, context: telegram.ext.ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-
-    # Check for channel membership
-    if not await is_user_in_channel(user_id, context.bot):
-        await update.message.reply_text(
-            "برای ادامه گفتگو، لطفاً ابتدا در کانال «حامین مدیا» عضو شو و بعد پیامت رو دوباره بفرست. 😊\n\nhttps://t.me/hamin_media"
-        )
-        return
-
     user_message = update.message.text
 
-    if user_id not in user_histories:
-        user_histories[user_id] = [{'role': 'system', 'content': SYSTEM_PROMPT}]
-
-    user_histories[user_id].append({'role': 'user', 'content': user_message})
+    try:
+        member = await context.bot.get_chat_member(chat_id=TARGET_CHANNEL, user_id=user_id)
+        if member.status not in ['member', 'administrator', 'creator']:
+            await context.bot.send_message(chat_id=user_id, text="شما عضو کانال نیستید. لطفاً برای استفاده از ربات، ابتدا در کانال @hamin_media عضو شوید.")
+            return
+    except telegram.error.BadRequest as e:
+        if e.message == "User not found":
+            await context.bot.send_message(chat_id=user_id, text="برای تایید عضویت، پروفایل تلگرام شما باید یک یوزرنیم (username) داشته باشد. لطفا یک یوزرنیم برای خود تنظیم کرده و دوباره امتحان کنید.")
+            return
+        else:
+            print(f"An unexpected BadRequest occurred: {e}")
+            await context.bot.send_message(chat_id=user_id, text="خطایی در بررسی عضویت شما رخ داد. لطفا لحظاتی دیگر دوباره تلاش کنید.")
+            return
 
     try:
         headers = {
-            'Content-Type': 'application/json',
-            'Authorization': f'Bearer {GAPGPT_API_KEY}'
+            'Authorization': f'Bearer {GAPGPT_API_KEY}',
+            'Content-Type': 'application/json'
         }
         payload = {
-            'model': GAPGPT_MODEL,
-            'messages': user_histories[user_id]
+            'model': 'gpt-3.5-turbo',
+            'messages': [
+                {'role': 'system', 'content': 'You are a helpful assistant for business consulting.'},
+                {'role': 'user', 'content': user_message}
+            ]
         }
 
         await update.effective_chat.send_action(action='typing')
         
-        print("DEBUG: Sending request to GapGPT API...")
-        response = requests.post(GAPGPT_API_URL, headers=headers, data=json.dumps(payload), timeout=30)
-        print(f"DEBUG: GapGPT API Response Status: {response.status_code}")
-        print(f"DEBUG: GapGPT API Response Body: {response.text}")
-        
-        response.raise_for_status() 
+        async with httpx.AsyncClient() as client:
+            print("DEBUG: Sending request to GapGPT API...")
+            response = await client.post(GAPGPT_API_URL, headers=headers, json=payload, timeout=30)
+            print(f"DEBUG: GapGPT API Response Status: {response.status_code}")
+            print(f"DEBUG: GapGPT API Response Body: {response.text}")
+            response.raise_for_status()
 
         ai_response = response.json()['choices'][0]['message']['content']
-        user_histories[user_id].append({'role': 'assistant', 'content': ai_response})
+        await context.bot.send_message(chat_id=user_id, text=ai_response)
 
-        await update.message.reply_text(ai_response)
-
-    except requests.exceptions.RequestException as e:
-        print(f"Error calling GapGPT API: {e}")
-        await update.message.reply_text("متاسفانه در ارتباط با سرویس هوش مصنوعی مشکلی پیش آمده. لطفا لحظاتی دیگر دوباره تلاش کنید.")
+    except httpx.HTTPStatusError as e:
+        print(f"HTTP error occurred: {e}")
+        await context.bot.send_message(chat_id=user_id, text="در ارتباط با سرویس هوش مصنوعی اشکالی پیش آمده است. (خطای HTTP)")
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-        await update.message.reply_text("یک خطای غیرمنتظره رخ داد. در حال بررسی موضوع هستیم.")
+        print(f"An error occurred: {e}")
+        await context.bot.send_message(chat_id=user_id, text="در ارتباط با سرویس هوش مصنوعی اشکالی پیش آمده است.")
 
-def main():
+async def main():
     """Main function to start the bot and the web server."""
     # Start Flask server in a background thread
     flask_thread = threading.Thread(target=run_flask)
@@ -124,7 +116,7 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_message))
 
     print("Bot is running...")
-    application.run_polling()
+    await application.run_polling()
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
