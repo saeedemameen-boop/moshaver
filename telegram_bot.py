@@ -115,8 +115,13 @@ async def main():
     application.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_message))
 
-    print(">>> RUNNING FINAL VERSION WITH SIGNAL FIX <<<")
-    await application.run_polling(stop_signals=None)
+    # Start the bot using the recommended async context manager
+    async with application:
+        await application.start()
+        await application.updater.start_polling()
+        print("Bot is running and polling...")
+        # Keep the script running until it's externally stopped
+        await asyncio.Future()
 
 if __name__ == '__main__':
     asyncio.run(main())
