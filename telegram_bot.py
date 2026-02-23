@@ -115,7 +115,7 @@ async def main():
     application.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_message))
 
-    print("Bot is running...")
+    print(">>> RUNNING FINAL VERSION WITH SIGNAL FIX <<<")
     await application.run_polling(stop_signals=None)
 
 if __name__ == '__main__':
