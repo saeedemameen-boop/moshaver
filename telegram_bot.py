@@ -50,7 +50,17 @@ async def is_user_in_channel(user_id, bot):
 
 async def start(update: telegram.Update, context: telegram.ext.ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    await context.bot.send_message(chat_id=user_id, text="سلام! به ربات مشاور کسب و کار خوش آمدید. لطفاً برای استفاده از خدمات، عضو کانال @hamin_media شوید.")
+    # Reset user history on /start to allow for fresh conversations
+    if user_id in user_histories:
+        del user_histories[user_id]
+
+    welcome_message = (
+        "سلام! به ربات «یک مشاور» خوش آمدید. 😊\n\n"
+        "من یک متخصص ازدواج هستم که برای کمک به شما در مسیر \"ازدواج آسان، به‌هنگام و آگاهانه\" اینجا هستم.\n\n"
+        "می‌توانید هر سوال یا دغدغه‌ای در مورد ازدواج دارید از من بپرسید. من با دقت و دلسوزی به شما پاسخ خواهم داد.\n\n"
+        f"برای استفاده از خدمات، عضویت در کانال {TARGET_CHANNEL} الزامی است."
+    )
+    await context.bot.send_message(chat_id=user_id, text=welcome_message)
 
 async def handle_message(update: telegram.Update, context: telegram.ext.ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -71,36 +81,48 @@ async def handle_message(update: telegram.Update, context: telegram.ext.ContextT
             return
 
     try:
+        # Get or create conversation history for the user
+        if user_id not in user_histories:
+            user_histories[user_id] = [{'role': 'system', 'content': SYSTEM_PROMPT}]
+        
+        # Add user's message to their history
+        user_histories[user_id].append({'role': 'user', 'content': user_message})
+
         headers = {
             'Authorization': f'Bearer {GAPGPT_API_KEY}',
             'Content-Type': 'application/json'
         }
         payload = {
-            'model': 'gpt-3.5-turbo',
-            'messages': [
-                {'role': 'system', 'content': 'You are a helpful assistant for business consulting.'},
-                {'role': 'user', 'content': user_message}
-            ]
+            'model': GAPGPT_MODEL,
+            'messages': user_histories[user_id]
         }
 
         await update.effective_chat.send_action(action='typing')
         
         async with httpx.AsyncClient() as client:
             print("DEBUG: Sending request to GapGPT API...")
-            response = await client.post(GAPGPT_API_URL, headers=headers, json=payload, timeout=30)
+            # Increased timeout for potentially longer AI responses
+            response = await client.post(GAPGPT_API_URL, headers=headers, json=payload, timeout=60)
             print(f"DEBUG: GapGPT API Response Status: {response.status_code}")
-            print(f"DEBUG: GapGPT API Response Body: {response.text}")
+            # Log the body for debugging, but be mindful of length/content
+            print(f"DEBUG: GapGPT API Response Body: {response.text[:500]}")
             response.raise_for_status()
 
-        ai_response = response.json()['choices'][0]['message']['content']
+        response_data = response.json()
+        ai_response = response_data['choices'][0]['message']['content']
+        
+        # Add AI's response to the history for context in next turn
+        user_histories[user_id].append({'role': 'assistant', 'content': ai_response})
+
         await context.bot.send_message(chat_id=user_id, text=ai_response)
 
     except httpx.HTTPStatusError as e:
         print(f"HTTP error occurred: {e}")
-        await context.bot.send_message(chat_id=user_id, text="در ارتباط با سرویس هوش مصنوعی اشکالی پیش آمده است. (خطای HTTP)")
+        print(f"Response body: {e.response.text}") # Log the actual error from the API
+        await context.bot.send_message(chat_id=user_id, text="متاسفانه در ارتباط با سرویس هوش مصنوعی مشکلی پیش آمده است. لطفا کمی بعد دوباره تلاش کنید. 🙏 (خطای HTTP)")
     except Exception as e:
         print(f"An error occurred: {e}")
-        await context.bot.send_message(chat_id=user_id, text="در ارتباط با سرویس هوش مصنوعی اشکالی پیش آمده است.")
+        await context.bot.send_message(chat_id=user_id, text="یک خطای غیرمنتظره رخ داد. تیم فنی در حال بررسی است. لطفا صبور باشید.")
 
 async def main():
     """Main function to start the bot and the web server."""
